@@ -151,7 +151,7 @@ def simulate_llm_decision_gemini(chat_history):
                     "message": {"type": "STRING", "description": "Completion message for 'finish' tool"},
                     "plan": {"type": "STRING", "description": "Plan description for 'plan' tool"}
                 },
-                "additionalProperties": False # Ensure only specified properties are allowed
+                # Removed "additionalProperties": False as it's not supported by generateContent with responseSchema
             }
         },
         "required": ["tool", "args"]
