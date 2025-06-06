@@ -151,7 +151,6 @@ def simulate_llm_decision_gemini(chat_history):
                     "message": {"type": "STRING", "description": "Completion message for 'finish' tool"},
                     "plan": {"type": "STRING", "description": "Plan description for 'plan' tool"}
                 },
-                # Removed "additionalProperties": False as it's not supported by generateContent with responseSchema
             }
         },
         "required": ["tool", "args"]
@@ -183,45 +182,20 @@ def simulate_llm_decision_gemini(chat_history):
         "If the user asks for a high-level approach or asks 'what is the next step?', provide a 'plan'."
     )
 
-    # Convert the Streamlit chat history into a format suitable for Gemini
-    # Note: Gemini's generate_content expects alternating user/model roles.
-    # We are providing a detailed instruction to the LLM to understand its role.
     full_gemini_history = _build_history_for_gemini(chat_history)
     
-    # Take only the last few turns if history gets too long to manage context window, 
-    # and provide the system instruction in the first 'user' turn for clarity.
-    # For a real agent, context condensation would be more sophisticated.
-    
-    # Adding a safety mechanism to prevent overly long prompts, though Gemini Flash is large.
-    # For this conceptual simulator, we'll send the full history for simplicity,
-    # but in a real app, careful token management would be needed.
-
     try:
-        # Prepare the generation config
         generation_config = {
             "response_mime_type": "application/json",
             "response_schema": response_schema
         }
 
-        # Sending system instruction with the first user turn or as a preliminary part
-        # Gemini's chat.send_message handles system instructions differently than direct generate_content.
-        # For direct generate_content, we can prepend it to the user's prompt.
-        
-        # Ensure the first part of the conversation is the system instruction.
-        # This requires careful construction of `contents`.
         contents_for_gemini = [
             {"role": "user", "parts": [{"text": system_instruction}]}
         ]
-        # Append existing chat history, making sure roles alternate correctly
         for entry in full_gemini_history:
-            # If the last entry was a user, and the current entry is also user, it's a prompt for next step
-            # from the agent's internal loop. We need to handle this.
-            # For simplicity in this simulator, we'll assume `_build_history_for_gemini` handles
-            # it such that direct appending works.
             contents_for_gemini.append(entry)
 
-
-        # Send the request to Gemini
         gemini_response = gemini_model.generate_content(
             contents=contents_for_gemini,
             generation_config=generation_config
@@ -230,7 +204,6 @@ def simulate_llm_decision_gemini(chat_history):
         st.session_state.logs.append(f"Gemini raw response: {gemini_response}")
 
         if gemini_response and gemini_response.candidates:
-            # Access the text part of the first candidate's content
             if gemini_response.candidates[0].content and gemini_response.candidates[0].content.parts:
                 response_text = gemini_response.candidates[0].content.parts[0].text
                 st.session_state.logs.append(f"Gemini parsed text: {response_text}")
@@ -301,7 +274,7 @@ def simulate_agent_step(current_prompt):
     if not st.session_state.chat_history or st.session_state.chat_history[-1].get('role') != 'user' or st.session_state.chat_history[-1]['parts'][0]['text'] != current_prompt:
         st.session_state.chat_history.append({'role': 'user', 'parts': [{'text': current_prompt}]})
 
-    max_steps = 5 # Limit for demonstration to prevent infinite loops
+    max_steps = 2 # Reduced for quicker demonstration
     step_count = 0
 
     while step_count < max_steps:
