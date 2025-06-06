@@ -2,11 +2,13 @@ import streamlit as st
 import json
 import time
 import google.generativeai as genai
+# import requests # Not used in the current mock setup to avoid external network calls/dependencies
 
 # --- Google Generative AI Configuration ---
 # IMPORTANT: In the Canvas environment, leave API_KEY as an empty string.
 # The Canvas runtime will automatically provide the API key for your fetch calls.
-API_KEY = "" # Your API Key for local testing outside Canvas. Do NOT paste a real key here for Canvas.
+API_KEY = "" # For local testing outside Canvas, you would typically put your key here.
+             # For Canvas, this should be empty.
 
 try:
     if API_KEY: # Only configure if an API key is provided (for local testing)
@@ -14,7 +16,7 @@ try:
     gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
     st.error(f"Failed to initialize Gemini model: {str(e)}")
-    st.info("Please ensure you have an API key configured if running locally, or that the Canvas environment provides it.")
+    st.info("Please ensure you have an API key configured if running locally (e.g., in `API_KEY`), or that the Canvas environment provides it.")
     st.stop()
 
 
@@ -27,6 +29,7 @@ MOCK_FILE_CONTENT = {
 }
 
 # --- Agent Tools (Simulated) ---
+# These tools do NOT call the LLM. They just return mock observations.
 
 def execute_bash_command(command):
     """Simulates bash shell execution."""
@@ -36,7 +39,7 @@ def execute_bash_command(command):
     elif command.startswith('echo'):
         return f"stdout: {command[len('echo '):]}\nstderr: "
     else:
-        return f"stdout: Command \"{command}\" executed successfully (simulated).\nstderr: "
+        return f"stdout: Command \"{command}\" executed successfully (simulated)."
 
 def execute_python_code(code):
     """Simulates Python code execution via IPython."""
@@ -44,7 +47,7 @@ def execute_python_code(code):
     if "print('Hello from OpenHands-Versa Python script!')" in code:
         return f"stdout: Hello from OpenHands-Versa Python script!\nstderr: "
     else:
-        return f"stdout: Python code executed (simulated). Output depends on code logic.\nstderr: "
+        return f"stdout: Python code executed (simulated). Output depends on code logic."
 
 def browse_web(url, action_type, element_id=None, text_input=None):
     """Simulates multimodal web browsing with context condensation."""
@@ -190,12 +193,14 @@ def simulate_llm_decision_gemini(chat_history):
             "response_schema": response_schema
         }
 
+        # The system instruction is provided as the first turn in the conversation
         contents_for_gemini = [
             {"role": "user", "parts": [{"text": system_instruction}]}
         ]
+        # Append existing chat history, ensuring alternating roles are handled by _build_history_for_gemini
         for entry in full_gemini_history:
             contents_for_gemini.append(entry)
-
+            
         gemini_response = gemini_model.generate_content(
             contents=contents_for_gemini,
             generation_config=generation_config
@@ -273,6 +278,7 @@ def simulate_agent_step(current_prompt):
     # Clear logs for a new task submission
     if st.session_state.get('last_prompt_submitted') != current_prompt:
         st.session_state.logs = []
+        st.session_state.chat_history = [] # Clear chat history for truly new task
         st.session_state.last_prompt_submitted = current_prompt
 
     # Append user prompt to history (if it's a new input)
@@ -301,7 +307,20 @@ def simulate_agent_step(current_prompt):
                 # Dynamically call the mock tool function
                 tool_func = globals().get(decision['tool'])
                 if tool_func:
-                    tool_output = tool_func(**decision['args'])
+                    # Validate arguments before calling to prevent errors from LLM hallucinations
+                    # This is a basic validation; a real system would be more robust
+                    valid_args = {}
+                    import inspect
+                    func_signature = inspect.signature(tool_func)
+                    for param_name, param in func_signature.parameters.items():
+                        if param_name in decision['args']:
+                            valid_args[param_name] = decision['args'][param_name]
+                        elif param.default is inspect.Parameter.empty and param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
+                            # Handle missing required arguments if LLM fails to provide
+                            st.session_state.logs.append(f"Warning: LLM did not provide required argument '{param_name}' for tool '{decision['tool']}'.")
+                            raise ValueError(f"Missing required argument: {param_name}")
+
+                    tool_output = tool_func(**valid_args)
                 else:
                     tool_output = f"Unknown tool: {decision['tool']}"
             except Exception as e:
@@ -434,6 +453,8 @@ if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'logs' not in st.session_state:
     st.session_state.logs = []
+if 'last_prompt_submitted' not in st.session_state:
+    st.session_state.last_prompt_submitted = ""
 
 
 # Display chat history
