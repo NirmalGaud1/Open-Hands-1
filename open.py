@@ -6,6 +6,7 @@ import os
 import json
 from typing import List, Dict, Any
 import logging
+import shutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,6 +19,11 @@ try:
 except Exception as e:
     st.error(f"Failed to initialize Gemini model: {str(e)}")
     st.stop()
+
+# Create uploads directory
+UPLOAD_DIR = "uploads"
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
 
 class OpenHandsVersaAgent:
     def __init__(self, max_steps: int = 100, planning_interval: int = 10, context_window: int = 1):
@@ -148,22 +154,31 @@ class OpenHandsVersaAgent:
             logging.error(f"Tool selection failed: {str(e)}")
             return "plan"
 
-    def generate_tool_input(self, tool: str, task: str) -> str:
-        """Generate input for the selected tool using Gemini API."""
+    def generate_tool_input(self, tool: str, task: str, uploaded_files: List[str]) -> str:
+        """Generate input for the selected tool using Gemini API, considering uploaded files."""
         try:
-            if tool == "code_execute":
+            if tool in ["browse", "file_view"]:
+                if not uploaded_files:
+                    return "Error: No files uploaded for browsing or viewing."
+                # Provide Gemini with the list of uploaded files
+                files_str = ", ".join(uploaded_files)
+                prompt = f"Task: {task}\nTool: {tool}\nAvailable uploaded files: {files_str}\nSelect the appropriate file name for the task. Return only the file name, no path or extra text."
+            elif tool == "code_execute":
                 prompt = f"Task: {task}\nTool: {tool}\nGenerate clean Python code to accomplish the task. Return only the code, no Markdown, no triple backticks, no extra text."
             else:
-                prompt = f"Task: {task}\nTool: {tool}\nGenerate the appropriate input for the tool (e.g., bash command, file path, search query). Return only the input, no explanation or formatting."
+                prompt = f"Task: {task}\nTool: {tool}\nGenerate the appropriate input for the tool (e.g., bash command, search query). Return only the input, no explanation or formatting."
             response = gemini_model.generate_content(prompt)
             tool_input = response.text.strip()
             logging.info(f"Generated input for {tool}: {tool_input}")
+            # For browse/file_view, prepend the uploads directory path
+            if tool in ["browse", "file_view"] and tool_input:
+                tool_input = os.path.join(UPLOAD_DIR, tool_input)
             return tool_input
         except Exception as e:
             logging.error(f"Tool input generation failed: {str(e)}")
             return ""
 
-    def run(self, task: str) -> str:
+    def run(self, task: str, uploaded_files: List[str]) -> str:
         """Main agent loop to process tasks."""
         logging.info(f"Starting task: {task}")
         result = ""
@@ -178,9 +193,9 @@ class OpenHandsVersaAgent:
             if tool == "plan":
                 observation = self.plan_task(task)
             else:
-                tool_input = self.generate_tool_input(tool, task)
-                if not tool_input:
-                    observation = f"Error: Failed to generate input for {tool}"
+                tool_input = self.generate_tool_input(tool, task, uploaded_files)
+                if "error" in tool_input.lower():
+                    observation = tool_input
                 else:
                     observation = self.tools[tool](tool_input)
 
@@ -213,24 +228,52 @@ if "current_tool" not in st.session_state:
     st.session_state["current_tool"] = ""
 if "step_count" not in st.session_state:
     st.session_state["step_count"] = 0
+if "uploaded_files" not in st.session_state:
+    st.session_state["uploaded_files"] = []
+
+# File upload section
+st.subheader("Upload Files")
+st.markdown("Upload HTML, text, or Markdown files to be processed by the agent (e.g., for browsing or viewing).")
+uploaded_files = st.file_uploader("Choose files", accept_multiple_files=True, type=["html", "txt", "md"])
+
+# Process uploaded files
+if uploaded_files:
+    # Clear previous uploads
+    st.session_state["uploaded_files"] = []
+    for uploaded_file in uploaded_files:
+        file_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        st.session_state["uploaded_files"].append(uploaded_file.name)
+    st.success(f"Uploaded files: {', '.join(st.session_state['uploaded_files'])}")
+
+# Display uploaded files
+if st.session_state["uploaded_files"]:
+    st.markdown("**Uploaded Files:**")
+    for file_name in st.session_state["uploaded_files"]:
+        st.markdown(f"- {file_name}")
 
 # Task input
 st.subheader("Enter Your Task")
-task = st.text_area("Describe your task:", placeholder="e.g., Write a Python script, browse an HTML file, search for information...", key="task_input")
+task = st.text_area("Describe your task:", placeholder="e.g., Write a Python script, browse an uploaded HTML file, read an uploaded Markdown file...", key="task_input")
 execute_button = st.button("Execute Task")
 
 # Initialize agent
 agent = OpenHandsVersaAgent(max_steps=10, planning_interval=3, context_window=1)
 
+# Execute task
 if execute_button and task:
     with st.spinner("Processing task..."):
-        result = agent.run(task)
-        if "error" in result.lower():
-            st.error(f"Task failed: {result}")
-        else:
-            st.success("Task executed successfully!")
-            st.markdown("**Result:**")
-            st.code(result, language="text")
+        try:
+            result = agent.run(task, st.session_state["uploaded_files"])
+            if "error" in result.lower():
+                st.error(f"Error: {result}")
+            else:
+                st.success("Task executed successfully!")
+                st.markdown("**Result:**")
+                st.code(result, language="text")
+        except Exception as e:
+            st.error("Error: " + str(e) + 
 
 # Display current tool and step
 st.markdown(f"**Current Tool:** {st.session_state['current_tool']}")
@@ -241,7 +284,7 @@ st.subheader("Event Stream")
 if st.session_state["event_stream"]:
     for event in st.session_state["event_stream"]:
         st.markdown(f"**Action:** {event['action']}")
-        st.markdown(f"**Observation:**")
+        st.markdown("**Observation:**")
         st.code(event['observation'], language="text")
         st.markdown("---")
 else:
@@ -251,19 +294,33 @@ else:
 st.subheader("Try Example Tasks")
 example_tasks = [
     "Write a Python script to print 'Hello, World!'",
-    "Browse the HTML file 'test.html' to list interactable elements",
+    "Browse an uploaded HTML file to list interactable elements",
     "Search for information about Python syntax",
-    "Read the Markdown file 'notes.md'",
-    "Run a bash command to list directory contents"
+    "Read an uploaded Markdown file",
+    "Run a bash command to list directory contents of uploads folder"
 ]
 for ex_task in example_tasks:
-    if st.button(ex_task, key=f"example_{ex_task}"):
+    if task.button(ex_task, key=f"example_{ex_task}"):
         task = ex_task
         with st.spinner("Processing example task..."):
-            result = agent.run(task)
-            if "error" in result.lower():
-                st.error(f"Task failed: {result}")
-            else:
-                st.success("Task executed successfully!")
-                st.markdown("**Result:**")
-                st.code(result, language="text")
+            try:
+                result = agent.run(task, st.session_state["uploaded_files"])
+                if "error" in result.lower():
+                    st.error(f"Task failed: {result}")
+                else:
+                    st.success("Task executed successfully!")
+                    st.markdown("**Result:**")
+                    st.code(result, language="text")
+            except Exception as e:
+                st.error(f"Task failed: {str(e)}")
+
+# Clean up uploads on app restart (optional)
+def cleanup_uploads():
+    if os.path.exists(UPLOAD_DIR):
+        shutil.rmtree(UPLOAD_DIR)
+        os.makedirs(UPLOAD_DIR)
+
+if st.button("Clear Uploaded Files"):
+    cleanup_uploads()
+    st.session_state["uploaded_files"] = []
+    st.success("Uploaded files cleared.")
