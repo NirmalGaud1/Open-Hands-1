@@ -270,53 +270,60 @@ def simulate_agent_step(current_prompt):
     Simulates a multi-step agent interaction based on the current prompt.
     Updates the chat history in session state.
     """
+    # Clear logs for a new task submission
+    if st.session_state.get('last_prompt_submitted') != current_prompt:
+        st.session_state.logs = []
+        st.session_state.last_prompt_submitted = current_prompt
+
     # Append user prompt to history (if it's a new input)
     if not st.session_state.chat_history or st.session_state.chat_history[-1].get('role') != 'user' or st.session_state.chat_history[-1]['parts'][0]['text'] != current_prompt:
         st.session_state.chat_history.append({'role': 'user', 'parts': [{'text': current_prompt}]})
 
-    max_steps = 2 # Reduced for quicker demonstration
+    max_steps = 2 # Reduced for quicker demonstration, balanced with allowing some multi-turn
     step_count = 0
 
-    while step_count < max_steps:
-        # Pass the entire chat history for the LLM to make a decision
-        decision = simulate_llm_decision_gemini(st.session_state.chat_history)
-        st.session_state.logs.append(f"LLM Decision: {decision}")
+    # Use a spinner to indicate processing
+    with st.spinner("Agent thinking..."):
+        while step_count < max_steps:
+            # Pass the entire chat history for the LLM to make a decision
+            decision = simulate_llm_decision_gemini(st.session_state.chat_history)
+            st.session_state.logs.append(f"LLM Decision: {decision}")
 
-        if not decision or decision['tool'] == 'finish':
-            message = decision['args']['message'] if decision else "Agent finished. No more actions inferred by the LLM."
-            st.session_state.chat_history.append({'role': 'model', 'parts': [{'text': f"Agent Action: Finish\nTool Output: {message}"}]})
-            break # Exit loop if 'finish' tool is called
+            if not decision or decision['tool'] == 'finish':
+                message = decision['args']['message'] if decision else "Agent finished. No more actions inferred by the LLM."
+                st.session_state.chat_history.append({'role': 'model', 'parts': [{'text': f"Agent Action: Finish\nTool Output: {message}"}]})
+                break # Exit loop if 'finish' tool is called
 
-        tool_output = ''
-        action_description = f"Agent Action: {decision['tool']}"
+            tool_output = ''
+            action_description = f"Agent Action: {decision['tool']}"
 
-        try:
-            # Dynamically call the mock tool function
-            tool_func = globals().get(decision['tool'])
-            if tool_func:
-                tool_output = tool_func(**decision['args'])
-            else:
-                tool_output = f"Unknown tool: {decision['tool']}"
-        except Exception as e:
-            tool_output = f"Error executing tool {decision['tool']}: {e}"
-            st.session_state.logs.append(f"Tool execution error: {e}")
+            try:
+                # Dynamically call the mock tool function
+                tool_func = globals().get(decision['tool'])
+                if tool_func:
+                    tool_output = tool_func(**decision['args'])
+                else:
+                    tool_output = f"Unknown tool: {decision['tool']}"
+            except Exception as e:
+                tool_output = f"Error executing tool {decision['tool']}: {e}"
+                st.session_state.logs.append(f"Tool execution error: {e}")
 
-        # Store tool output in a consistent format in chat history
-        st.session_state.chat_history.append({'role': 'model', 'parts': [{'text': f"{action_description}\nTool Output: {json.dumps(tool_output) if isinstance(tool_output, (dict, list)) else str(tool_output)}"}]})
-        
-        # If the LLM's decision was to 'plan', it doesn't consume a concrete action step
-        # that needs an observation to react to, so we just continue.
-        if decision['tool'] == 'plan':
+            # Store tool output in a consistent format in chat history
+            st.session_state.chat_history.append({'role': 'model', 'parts': [{'text': f"{action_description}\nTool Output: {json.dumps(tool_output) if isinstance(tool_output, (dict, list)) else str(tool_output)}"}]})
+            
+            # If the LLM's decision was to 'plan', it doesn't consume a concrete action step
+            # that needs an observation to react to, so we just continue.
+            if decision['tool'] == 'plan':
+                step_count += 1
+                time.sleep(0.5) # Simulate LLM thinking time
+                continue 
+            
             step_count += 1
-            time.sleep(0.5) # Simulate LLM thinking time
-            continue 
-        
-        step_count += 1
-        # After a tool execution (unless it's 'finish' or 'plan'),
-        # add a prompt for the LLM to generate the next step based on the tool's output.
-        if decision['tool'] != 'finish':
-            st.session_state.chat_history.append({'role': 'user', 'parts': [{'text': f"Based on the last tool output, what is the next step to achieve the goal? (Current Task: \"{current_prompt}\")"}]})
-            time.sleep(0.5) # Simulate LLM thinking time
+            # After a tool execution (unless it's 'finish' or 'plan'),
+            # add a prompt for the LLM to generate the next step based on the tool's output.
+            if decision['tool'] != 'finish':
+                st.session_state.chat_history.append({'role': 'user', 'parts': [{'text': f"Based on the last tool output, what is the next step to achieve the goal? (Current Task: \"{current_prompt}\")"}]})
+                time.sleep(0.5) # Simulate LLM thinking time
 
 
 # --- Streamlit UI Setup ---
