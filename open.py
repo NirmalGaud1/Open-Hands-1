@@ -329,7 +329,16 @@ st.set_page_config(
 # Custom CSS for styling
 st.markdown("""
 <style>
-    .reportview-container .main .block-container {
+    /* Overall page background */
+    html, body, [data-testid="stAppViewContainer"] {
+        background-color: #282828; /* Changed to a slightly lighter dark grey */
+        color: #E0E0E0; /* Ensure text color is light */
+    }
+    .reportview-container {
+        background-color: #282828; /* Also apply to the main report container */
+    }
+
+    .main .block-container {
         max-width: 800px;
         padding-top: 2rem;
         padding-right: 1rem;
