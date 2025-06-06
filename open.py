@@ -34,10 +34,10 @@ class OpenHandsVersaAgent:
             "file_view": self.view_file,
             "plan": self.plan_task
         }
-        # Simulated knowledge base (replace with real search API in practice)
+        # Simulated knowledge base
         self.knowledge_base = {
-            "python syntax": "Python is a high-level programming language with clear syntax...",
-            "html basics": "HTML uses tags like <button>, <a>, <input> to structure web content..."
+            "python syntax": "Python is a high-level programming language with clear syntax. Example: print('Hello, World!') outputs text to the console.",
+            "html basics": "HTML uses tags like <button>, <a>, <input> to structure web content."
         }
 
     def execute_bash(self, command: str) -> str:
@@ -54,6 +54,8 @@ class OpenHandsVersaAgent:
     def execute_python(self, code: str) -> str:
         """Execute Python code and return the output."""
         try:
+            # Clean code by removing Markdown or extra characters
+            code = re.sub(r'```python\n|```', '', code).strip()
             with open("temp_code.py", "w") as f:
                 f.write(code)
             result = subprocess.run(["python", "temp_code.py"], capture_output=True, text=True)
@@ -123,9 +125,9 @@ class OpenHandsVersaAgent:
             for event in recent_events:
                 summary += f"Action: {event['action']}, Observation: {event['observation']}\n"
             
-            prompt = f"Task: {task}\n{summary}\nGenerate a plan for the next steps, including which tools to use (bash, code_execute, browse, search, file_view)."
+            prompt = f"Task: {task}\n{summary}\nGenerate a concise plan for the next steps, specifying which tools (bash, code_execute, browse, search, file_view) to use. Avoid code blocks or extra formatting."
             response = gemini_model.generate_content(prompt)
-            plan = response.text
+            plan = response.text.strip()
             logging.info(f"Plan generated:\n{plan}")
             return plan
         except Exception as e:
@@ -135,12 +137,11 @@ class OpenHandsVersaAgent:
     def select_tool(self, task: str) -> str:
         """Select the appropriate tool using Gemini API."""
         try:
-            prompt = f"Task: {task}\nAvailable tools: bash, code_execute, browse, search, file_view, plan\n" \
-                     f"Select the most appropriate tool for the task. Return only the tool name."
+            prompt = f"Task: {task}\nAvailable tools: bash, code_execute, browse, search, file_view, plan\nSelect the most appropriate tool for the task. Return only the tool name, no explanation or formatting."
             response = gemini_model.generate_content(prompt)
             tool = response.text.strip()
             if tool not in self.tools:
-                tool = "plan"  # Default to planning if invalid tool
+                tool = "plan"
             logging.info(f"Selected tool: {tool}")
             return tool
         except Exception as e:
@@ -150,7 +151,10 @@ class OpenHandsVersaAgent:
     def generate_tool_input(self, tool: str, task: str) -> str:
         """Generate input for the selected tool using Gemini API."""
         try:
-            prompt = f"Task: {task}\nTool: {tool}\nGenerate the appropriate input for the tool (e.g., bash command, Python code, file path, search query)."
+            if tool == "code_execute":
+                prompt = f"Task: {task}\nTool: {tool}\nGenerate clean Python code to accomplish the task. Return only the code, no Markdown, no triple backticks, no extra text."
+            else:
+                prompt = f"Task: {task}\nTool: {tool}\nGenerate the appropriate input for the tool (e.g., bash command, file path, search query). Return only the input, no explanation or formatting."
             response = gemini_model.generate_content(prompt)
             tool_input = response.text.strip()
             logging.info(f"Generated input for {tool}: {tool_input}")
@@ -198,7 +202,7 @@ class OpenHandsVersaAgent:
 
 # Streamlit UI
 st.title("OpenHands-Versa Agent")
-st.write("An AI agent inspired by 'Coding Agents with Multimodal Browsing are Generalist Problem Solvers'")
+st.markdown("An AI agent inspired by *Coding Agents with Multimodal Browsing are Generalist Problem Solvers*")
 
 # Initialize session state
 if "event_stream" not in st.session_state:
@@ -211,7 +215,8 @@ if "step_count" not in st.session_state:
     st.session_state["step_count"] = 0
 
 # Task input
-task = st.text_area("Enter your task:", placeholder="e.g., Write a Python script, browse an HTML file, search for information...")
+st.subheader("Enter Your Task")
+task = st.text_area("Describe your task:", placeholder="e.g., Write a Python script, browse an HTML file, search for information...", key="task_input")
 execute_button = st.button("Execute Task")
 
 # Initialize agent
@@ -220,23 +225,27 @@ agent = OpenHandsVersaAgent(max_steps=10, planning_interval=3, context_window=1)
 if execute_button and task:
     with st.spinner("Processing task..."):
         result = agent.run(task)
-        st.success("Task executed!")
-        st.write("**Result:**")
-        st.write(result)
+        if "error" in result.lower():
+            st.error(f"Task failed: {result}")
+        else:
+            st.success("Task executed successfully!")
+            st.markdown("**Result:**")
+            st.code(result, language="text")
 
 # Display current tool and step
-st.write(f"**Current Tool:** {st.session_state['current_tool']}")
-st.write(f"**Step Count:** {st.session_state['step_count']}")
+st.markdown(f"**Current Tool:** {st.session_state['current_tool']}")
+st.markdown(f"**Step Count:** {st.session_state['step_count']}")
 
 # Display event stream
 st.subheader("Event Stream")
 if st.session_state["event_stream"]:
     for event in st.session_state["event_stream"]:
-        st.write(f"**Action:** {event['action']}")
-        st.write(f"**Observation:** {event['observation']}")
-        st.write("---")
+        st.markdown(f"**Action:** {event['action']}")
+        st.markdown(f"**Observation:**")
+        st.code(event['observation'], language="text")
+        st.markdown("---")
 else:
-    st.write("No events yet.")
+    st.markdown("No events yet.")
 
 # Example tasks
 st.subheader("Try Example Tasks")
@@ -248,10 +257,13 @@ example_tasks = [
     "Run a bash command to list directory contents"
 ]
 for ex_task in example_tasks:
-    if st.button(ex_task):
+    if st.button(ex_task, key=f"example_{ex_task}"):
         task = ex_task
         with st.spinner("Processing example task..."):
             result = agent.run(task)
-            st.success("Task executed!")
-            st.write("**Result:**")
-            st.write(result)
+            if "error" in result.lower():
+                st.error(f"Task failed: {result}")
+            else:
+                st.success("Task executed successfully!")
+                st.markdown("**Result:**")
+                st.code(result, language="text")
